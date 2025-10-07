@@ -22,25 +22,25 @@ jobs:
     timeout-minutes: 30
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      SPACE_ID: dhani10/predictive-maintenance-app
-      MODEL_REPO: dhani10/predictive-maintenance-model
-      MODEL_FILE: model/engine_model.joblib
+      SPACE_ID: dhani10/predictive-maintenance-app          # <— change if needed
+      MODEL_REPO: dhani10/predictive-maintenance-model      # <— change if needed
+      MODEL_FILE: model/engine_model.joblib                 # <— path inside your repo
 
     steps:
-      - name: Checkout repo
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Install deps (huggingface_hub)
+      - name: Install hub client
         run: |
           python -m pip install --upgrade pip
           pip install "huggingface_hub>=0.26.0"
 
-      - name: Deploy to HF (upload model if present + push Space)
+      - name: Upload model (if present) and deploy Space (Docker)
         shell: bash
         run: |
           python - <<'PY'
@@ -61,12 +61,11 @@ jobs:
           login(HF_TOKEN)
           api = HfApi(token=HF_TOKEN)
 
-          # --- 1) Upload model if file exists in repo ---
+          # --- 1) Upload model file if exists in repo ---
           mf = Path(MODEL_FILE)
           if mf.exists():
-              print(f"[model] Uploading {mf} to {MODEL_REPO} ...")
+              print(f"[model] Uploading {mf} → {MODEL_REPO}")
               create_repo(repo_id=MODEL_REPO, repo_type="model", private=True, exist_ok=True, token=HF_TOKEN)
-              # keep the same path in the repo
               upload_file(
                   path_or_fileobj=str(mf),
                   path_in_repo=str(mf).replace("\\", "/"),
@@ -75,24 +74,26 @@ jobs:
                   token=HF_TOKEN,
                   commit_message=f"Upload {mf.name} via GitHub Actions"
               )
-              print(f"[model] Done: https://huggingface.co/{MODEL_REPO}")
+              print(f"[model] Uploaded: https://huggingface.co/{MODEL_REPO}")
           else:
-              print(f"[model] Skipped: {mf} not found in the repo.")
+              print(f"[model] Skipped (not found): {mf}")
 
           # --- 2) Prepare Space payload (Docker runtime) ---
-          deploy_dir = Path("deploy_pkg")
-          if deploy_dir.exists(): shutil.rmtree(deploy_dir)
-          deploy_dir.mkdir(parents=True, exist_ok=True)
-
-          # copy files if present; they should be in repo root
+          # Required files in repo root:
           needed = ["Dockerfile", "requirements.txt", "streamlit_app.py"]
           for f in needed:
-              p = Path(f)
-              if not p.exists():
+              if not Path(f).exists():
                   raise SystemExit(f"Missing required file: {f}")
-              shutil.copy2(p, deploy_dir / p.name)
 
-          # always write a correct README for Docker runtime
+          deploy_dir = Path("deploy_pkg")
+          if deploy_dir.exists():
+              shutil.rmtree(deploy_dir)
+          deploy_dir.mkdir(parents=True, exist_ok=True)
+
+          for f in ["Dockerfile", "requirements.txt", "streamlit_app.py"]:
+              shutil.copy2(f, deploy_dir / f)
+
+          # Always ship a correct README for Docker runtime
           (deploy_dir / "README.md").write_text(
               """---
 title: Predictive Maintenance App (Docker)
@@ -103,7 +104,8 @@ sdk: docker
 pinned: false
 ---
 This Space runs a Streamlit app inside a custom Docker image.
-If the model repo is private, add a Space Secret **HF_TOKEN** (READ token) and restart the Space.
+
+If the model repo is **private**, add a Space Secret **HF_TOKEN** (READ token) and restart the Space.
 """,
               encoding="utf-8"
           )
@@ -116,13 +118,13 @@ If the model repo is private, add a Space Secret **HF_TOKEN** (READ token) and r
               create_repo(repo_id=SPACE_ID, repo_type="space", private=False, exist_ok=True, token=HF_TOKEN)
               print(f"[space] Created: https://huggingface.co/spaces/{SPACE_ID}")
 
-          # --- 4) Upload all Space files (Dockerfile, requirements.txt, streamlit_app.py, README.md) ---
+          # --- 4) Upload payload ---
           upload_folder(
               folder_path=str(deploy_dir),
               repo_id=SPACE_ID,
               repo_type="space",
               token=HF_TOKEN,
-              commit_message="Deploy Docker-based Streamlit app from GitHub Actions",
+              commit_message="Deploy Docker-based Streamlit app via GitHub Actions",
           )
           print(f"[space] Files uploaded.")
 
@@ -135,3 +137,4 @@ If the model repo is private, add a Space Secret **HF_TOKEN** (READ token) and r
 
           print(f"\n✅ Model: https://huggingface.co/{MODEL_REPO}")
           print(f"✅ Space: https://huggingface.co/spaces/{SPACE_ID}")
+          PY
